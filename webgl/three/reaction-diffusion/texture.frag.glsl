@@ -1,7 +1,8 @@
 precision highp float;
 
+#pragma glslify: blur = require('glsl-fast-gaussian-blur/13')
+
 uniform float uTime;
-uniform sampler2D uTexture;
 uniform vec2 uResolution;
 uniform vec3 uMouse;
 uniform vec4 uDiffusionSettings;
@@ -10,6 +11,8 @@ uniform vec4 uDiffusionSettings;
 // z: feedRate
 // w: killRate
 uniform vec4 uBrush;
+uniform sampler2D uTexture;
+uniform sampler2D uAudioTexture;
 
 varying vec2 vUv;
 
@@ -22,6 +25,48 @@ float circle(in vec2 uv, in vec2 position, in float radius) {
 
 void main() {
   vec2 uv = vUv;
+  vec4 ad = texture2D(uAudioTexture, uv);
+
+
+  float radius = 0.75;
+  float angle = 3.14159 * ad.r;
+  vec2 tc = uv;
+  tc -= vec2(0.5);
+  float dist = length(tc);
+  if (dist < radius) 
+  {
+    float percent = (radius - dist) / radius;
+    float theta = percent * percent * angle * 8.0 + ad.g;
+    float s = sin(theta + uTime * 1.1);
+    float c = cos(theta + uTime * 1.1);
+    tc = vec2(dot(tc, vec2(c, -s)), dot(tc, vec2(s, c)));
+  }
+
+  // vec4 audioData = blur(uAudioTexture, uv, uResolution, vec2(1, 1));
+  vec4 audioData = clamp(texture2D(uAudioTexture, tc), 0.0, 1.0);
+  audioData.r = pow(audioData.r, 2.0);
+
+  vec2 uvc = uv - vec2(0.5);
+  float d = sqrt(dot(uvc, uvc));
+  float t = 1.0 - smoothstep(0.0, 1.0, d);
+
+  float smooth_circle = 1.0 - smoothstep(0.0, 0.75, d);
+  audioData.r *= smooth_circle;
+
+  vec3 color = vec3(0.0);
+
+  float diffusionRateA = uDiffusionSettings.x;
+  float diffusionRateB = uDiffusionSettings.y;
+  float feedRate = uDiffusionSettings.z;
+  float killRate = uDiffusionSettings.w;
+
+  // diffusionRateB -= smooth_circle / 2.0;
+  // feedRate += (audioData.r - 0.5) / 500.0;
+  // feedRate += smoothstep(0.0, 0.6, d) * audioData.r / 700.0;
+  // killRate -= (audioData.r - 0.5) / 700.0;
+  // killRate -= smoothstep(0.0, 0.6, d) / 300.0;
+
+  // Reaction diffusion
   vec4 newState = vec4(0.0);
   vec4 oldState = texture2D(uTexture, uv);
 
@@ -50,16 +95,20 @@ void main() {
   }
 
   newState.r = oldState.r +
-               (laplace.r * uDiffusionSettings.r) -
+               (laplace.r * diffusionRateA) -
                oldState.r * oldState.g * oldState.g +
-               uDiffusionSettings.z * (1.0 - oldState.r);
+               feedRate * (1.0 - oldState.r);
   newState.g = oldState.g +
-               (laplace.g * uDiffusionSettings.g) +
+               (laplace.g * diffusionRateB) +
                oldState.r * oldState.g * oldState.g -
-               (uDiffusionSettings.w + uDiffusionSettings.z) * oldState.g;
+               (killRate + feedRate) * oldState.g;
 
   // Drawing
   newState.g += circle(uv, uMouse.xy, uBrush.x) * uMouse.z * 0.01;
 
+  newState.g += pow(audioData.r, 20.0) * 0.01; // circle(uv, vec2(audioData.r), pow(audioData.g, 2.0)) * 0.01; 
+  newState.r -= circle(uv, vec2(-audioData.r), pow(audioData.g, 3.0)) * 0.01; 
+
   gl_FragColor = vec4(newState.rg, 0.0, 1.0);
+  // gl_FragColor = vec4(audioData.r, 0.0, 0.0, 1.0);
 }
